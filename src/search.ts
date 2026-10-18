@@ -101,3 +101,24 @@ export function search(brain: Brain, query: string, cfg: SearchConfig, opts: Sea
   const rows = brain.db.prepare(sql).all(params) as unknown as (Omit<SearchHit, 'summarized'> & { summarized: number })[];
   return rows.map((r) => ({ ...r, summarized: Boolean(r.summarized) }));
 }
+
+/** Newest records first, no keywords: for "what was I working on last week?" questions. */
+export function recent(brain: Brain, opts: { days?: number; limit?: number; source?: string } = {}): SearchHit[] {
+  const days = Math.max(1, Math.min(opts.days ?? 7, 365));
+  const limit = Math.max(1, Math.min(opts.limit ?? 10, 50));
+  const where = ["julianday(r.date) >= julianday('now') - :days"];
+  if (opts.source) where.push('r.source = :source');
+  const params: Record<string, string | number> = { days, limit };
+  if (opts.source) params.source = opts.source;
+  const rows = brain.db
+    .prepare(
+      `SELECT r.id, r.source, r.title, r.date, r.uri, r.summary, r.question, r.facts_json,
+              (r.summary_hash = r.hash) AS summarized, 0.0 AS bm25,
+              max(0.0, julianday('now') - julianday(r.date)) AS age_days, 1.0 AS recency, 0.0 AS score,
+              substr(r.body, 1, 300) AS snippet
+       FROM records r WHERE ${where.join(' AND ')}
+       ORDER BY r.priority DESC, r.date DESC LIMIT :limit`,
+    )
+    .all(params) as unknown as (Omit<SearchHit, 'summarized'> & { summarized: number })[];
+  return rows.map((r) => ({ ...r, summarized: Boolean(r.summarized) }));
+}

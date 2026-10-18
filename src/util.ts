@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -9,4 +10,16 @@ export function isMain(metaUrl: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The node binary to write into configs: the PATH one (e.g. /opt/homebrew/bin/node, a stable
+ * symlink) when it is the same node we run on, else our own path. Survives `brew upgrade node`.
+ */
+export function stableNodePath(): string {
+  try {
+    const onPath = execFileSync('/usr/bin/which', ['node'], { encoding: 'utf8' }).trim();
+    if (onPath && fs.realpathSync(onPath) === fs.realpathSync(process.execPath)) return onPath;
+  } catch {}
+  return process.execPath;
 }

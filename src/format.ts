@@ -27,17 +27,18 @@ export function factLines(f: Facts | null, max = 3): string[] {
 }
 
 /** Search results as plain text for an agent: enough to answer, plus where it came from. */
-export function hitsToText(query: string, hits: SearchHit[]): string {
+export function hitsToText(query: string, hits: SearchHit[], ranked = true): string {
   if (!hits.length)
     return `No matches for "${query}". Try different or fewer keywords (synonyms, a project name, an exact error message).`;
-  const out = [`${hits.length} match(es) for "${query}", ranked by BM25 × recency (newer wins ties):`, ''];
+  const head = ranked ? `${hits.length} match(es) for "${query}", ranked by BM25 × recency (newer wins ties):` : `${hits.length} record(s), ${query}, newest first:`;
+  const out = [head, ''];
   hits.forEach((h, i) => {
     out.push(`${i + 1}. ${h.date.slice(0, 10)} [${h.source}] ${h.title}`);
-    out.push(`   id: ${h.id} · score ${h.score.toFixed(2)} (bm25 ${(-h.bm25).toFixed(2)} × recency ${h.recency.toFixed(2)})`);
+    out.push(ranked ? `   id: ${h.id} · score ${h.score.toFixed(2)} (bm25 ${(-h.bm25).toFixed(2)} × recency ${h.recency.toFixed(2)})` : `   id: ${h.id}`);
     if (h.summarized) {
       if (h.question) out.push(`   Q: ${clip(h.question, 200)}`);
       if (h.summary) out.push(`   Summary: ${clip(h.summary, 600)}`);
-      for (const l of factLines(parseFacts(h.facts_json))) out.push(`   ${l}`);
+      for (const l of factLines(parseFacts(h.facts_json), 2)) out.push(`   ${l}`);
     } else {
       out.push(`   (no note yet) ${clip(h.snippet, 300)}`);
     }

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dataDir } from './config.ts';
+import { stableNodePath } from './util.ts';
 
 export const LABEL = 'com.second-brain.sync';
 
@@ -27,7 +28,7 @@ function which(bin: string): string | null {
 const xml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 export function buildPlist(everyMinutes: number): string {
-  const node = process.execPath;
+  const node = stableNodePath();
   const claude = which('claude');
   // launchd starts with a bare PATH; include where node and claude live so `claude -p` works.
   const pathDirs = [path.dirname(node), claude ? path.dirname(claude) : '', '/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']
@@ -62,7 +63,7 @@ ${Object.entries(env).map(([k, v]) => `    <key>${k}</key><string>${xml(v)}</str
 }
 
 export function cronLine(everyMinutes: number): string {
-  return `*/${everyMinutes} * * * * ${process.execPath} ${cliPath()} sync --quiet >> ${path.join(dataDir(), 'logs', 'sync.log')} 2>&1`;
+  return `*/${everyMinutes} * * * * ${stableNodePath()} ${cliPath()} sync --quiet >> ${path.join(dataDir(), 'logs', 'sync.log')} 2>&1`;
 }
 
 function uid(): string {

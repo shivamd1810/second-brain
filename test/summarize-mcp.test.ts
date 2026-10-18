@@ -90,7 +90,7 @@ test('MCP server: an agent can list tools, search and fetch a record', async () 
   await client.connect(clientT);
 
   const tools = await client.listTools();
-  assert.deepEqual(tools.tools.map((t) => t.name).sort(), ['get_record', 'search_memory']);
+  assert.deepEqual(tools.tools.map((t) => t.name).sort(), ['get_record', 'recent_memory', 'search_memory']);
   assert.match(client.getInstructions() ?? '', /personal memory/);
 
   const res = await client.callTool({ name: 'search_memory', arguments: { query: 'rabbitmq sqs', limit: 2 } });
@@ -98,6 +98,9 @@ test('MCP server: an agent can list tools, search and fetch a record', async () 
   assert.match(text, /2 match\(es\)/);
   assert.match(text, /Decision: Use SQS instead of RabbitMQ — because no broker to run/);
   assert.match(text, /id: r0/, 'newest first');
+
+  const rec0 = await client.callTool({ name: 'recent_memory', arguments: { days: 1 } });
+  assert.match((rec0.content as { text: string }[])[0].text, /3 record\(s\)[\s\S]*1\. .*Record 0/);
 
   const rec = await client.callTool({ name: 'get_record', arguments: { id: 'r0' } });
   assert.match((rec.content as { text: string }[])[0].text, /--- original ---\nbody 0/);

@@ -12,10 +12,10 @@ import { hitsToText, recordToText, parseFacts } from './format.ts';
 import { ago, connectorHealth, isUnhealthy, notify } from './health.ts';
 import { pickLlm } from './llm.ts';
 import * as schedule from './schedule.ts';
-import { search } from './search.ts';
+import { recent, search } from './search.ts';
 import { summarizePending } from './summarize.ts';
 import { runConnectors } from './sync.ts';
-import { isMain } from './util.ts';
+import { isMain, stableNodePath } from './util.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MCP_ENTRY = path.join(HERE, 'mcp.ts');
@@ -39,6 +39,7 @@ Usage: second-brain <command> [options]
                          pull only what's new from each source, then write notes
   summarize [--limit N]  write notes for records still waiting (resumable)
   search <words…> [--limit N] [--source S] [--since DATE] [--explain] [--json]
+  recent [--days 7] [--source S]   newest records, no keywords
   show <id>              one record: its note and the full original
   doctor                 health check: last good run per connector, stale = loud
   stats                  record counts per source
@@ -269,7 +270,7 @@ function cmdDoctor(): number {
 }
 
 function cmdMcpConfig(): void {
-  const node = process.execPath;
+  const node = stableNodePath();
   out(bold('Claude Code') + dim('  (user scope, every project)'));
   out(`  claude mcp add second-brain --scope user -- ${node} ${MCP_ENTRY}`);
   out(bold('Gemini CLI'));
@@ -310,6 +311,13 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     case 'show':
       cmdShow(rest);
       return 0;
+    case 'recent': {
+      const { values } = parseArgs({ args: rest, options: { days: { type: 'string' }, source: { type: 'string' }, limit: { type: 'string' } } });
+      const brain = new Brain();
+      out(hitsToText(`last ${values.days ?? 7} days`, recent(brain, { days: values.days ? Number(values.days) : 7, source: values.source, limit: values.limit ? Number(values.limit) : 10 }), false));
+      brain.close();
+      return 0;
+    }
     case 'stats':
       cmdStats();
       return 0;

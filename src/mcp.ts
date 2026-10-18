@@ -9,7 +9,7 @@ import { SOURCES } from './connectors/index.ts';
 import { Brain } from './db.ts';
 import { hitsToText, recordToText } from './format.ts';
 import { staleWarning } from './health.ts';
-import { search } from './search.ts';
+import { recent, search } from './search.ts';
 import { isMain } from './util.ts';
 
 export const INSTRUCTIONS = `This server is the user's personal memory ("second brain"): their past Claude Code sessions,
@@ -44,6 +44,26 @@ export function createServer(brain = new Brain(), cfg = loadConfig()): McpServer
       const warning = staleWarning(brain, cfg);
       const text = hitsToText(query, hits) + (warning ? `\n\n${warning}` : '');
       return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  server.registerTool(
+    'recent_memory',
+    {
+      title: 'Recent memory',
+      description:
+        'List the newest records (sessions first), no keywords needed. Use for "what was I working on yesterday / last week?". ' +
+        'For anything topic-specific, use search_memory instead.',
+      inputSchema: {
+        days: z.number().int().min(1).max(365).optional().describe('How far back (default 7)'),
+        limit: z.number().int().min(1).max(25).optional().describe('Max results (default 10)'),
+        source: z.enum(SOURCES as [string, ...string[]]).optional().describe('Only one source'),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ days, limit, source }) => {
+      const hits = recent(brain, { days, limit, source });
+      return { content: [{ type: 'text', text: hitsToText(`newest ${days ?? 7} days`, hits, false) }] };
     },
   );
 
