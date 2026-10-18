@@ -17,12 +17,15 @@ export interface ConnectorOutcome {
 export async function runConnectors(
   brain: Brain,
   cfg: Config,
-  opts: { only?: string[]; log?: (m: string) => void } = {},
+  opts: { only?: string[]; full?: boolean; log?: (m: string) => void } = {},
 ): Promise<ConnectorOutcome[]> {
   const log = opts.log ?? (() => {});
   const out: ConnectorOutcome[] = [];
   for (const c of CONNECTORS) {
     if (opts.only?.length && !opts.only.includes(c.name)) continue;
+    // --full: forget where we stopped and re-read the source. Unchanged records keep their notes.
+    // Gmail is skipped: its records never change, and a full re-fetch is slow.
+    if (opts.full && c.name !== 'gmail') brain.setState(c.name, {});
     if (!c.enabled(cfg)) {
       out.push({ name: c.name, status: 'off', new: 0, updated: 0, notes: [c.describe(cfg)], ms: 0 });
       continue;

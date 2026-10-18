@@ -64,6 +64,7 @@ export const notesConnector: Connector = {
   async run(ctx: ConnectorContext): Promise<ConnectorResult> {
     const cfg = ctx.config.connectors.notes;
     const state = ctx.brain.getState<State>('notes', { files: {} });
+    state.files ??= {};
     let created = 0;
     let updated = 0;
     let scanned = 0;

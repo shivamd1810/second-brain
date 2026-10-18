@@ -65,6 +65,9 @@ const DROP_BLOCKS = [
   'task-notification',
   'command-message',
   'user-prompt-submit-hook',
+  'widget_context_hint',
+  'ide_opened_file',
+  'ide_selection',
 ];
 
 export function cleanUserText(text: string): string {
@@ -207,7 +210,8 @@ export function chunkItems(items: Item[], firstIndex: number, carriedPrompt?: st
 }
 
 export function projectName(cwd: string | undefined, dirName: string): string {
-  if (cwd) return path.basename(cwd);
+  // Worktrees live in <repo>/.claude/worktrees/<name>: name the repo, not the worktree.
+  if (cwd) return path.basename(cwd.split(`${path.sep}.claude${path.sep}worktrees${path.sep}`)[0]);
   return dirName.replace(/^-/, '').split('-').slice(-1)[0] || dirName;
 }
 
@@ -234,7 +238,10 @@ export function chunkToRecord(
     title = `Subagent${opts.parentTitle ? ` of "${opts.parentTitle}"` : ''}: ${cap(prompt, 90)}`;
   } else {
     id = `cs-${sessionId.slice(0, 8)}-${chunk.index}`;
-    title = sessionTitle ? `${sessionTitle}${chunk.index > 0 ? ` (part ${chunk.index + 1})` : ''}` : cap(prompt, 100);
+    // Long sessions drift: later parts also carry their own first prompt.
+    if (!sessionTitle) title = cap(prompt, 100);
+    else if (chunk.index === 0) title = sessionTitle;
+    else title = `${sessionTitle} (part ${chunk.index + 1})${prompt ? `: ${cap(prompt, 70)}` : ''}`;
   }
   const lastTs = [...chunk.items].reverse().find((i) => i.ts)?.ts;
   const header = [
@@ -280,6 +287,7 @@ export const claudeSessions: Connector = {
     if (!fs.existsSync(root)) throw new Error(`projects dir not found: ${root}`);
     const now = (ctx.now ?? new Date()).getTime();
     const state = ctx.brain.getState<State>('claude-sessions', { files: {} });
+    state.files ??= {};
     const files = listSessionFiles(root, cfg.includeSubagents, cfg.exclude);
     let created = 0;
     let updated = 0;

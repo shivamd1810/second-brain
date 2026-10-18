@@ -35,9 +35,10 @@ Usage: second-brain <command> [options]
 
   init [--git <repo>…] [--scan <dir>] [--notes <dir>…] [--no-subagents]
                          create ${'~/.second-brain/config.json'}
-  sync [--limit N] [--no-summarize] [--only a,b] [--notify] [--quiet]
+  sync [--limit N] [--no-summarize] [--only a,b] [--full] [--notify] [--quiet]
                          pull only what's new from each source, then write notes
-  summarize [--limit N]  write notes for records still waiting (resumable)
+                         (--full re-reads sources from scratch; unchanged records keep their notes)
+  summarize [--limit N] [--ids a,b]  write notes for records still waiting (resumable)
   search <words…> [--limit N] [--source S] [--since DATE] [--explain] [--json]
   recent [--days 7] [--source S]   newest records, no keywords
   show <id>              one record: its note and the full original
@@ -116,6 +117,7 @@ async function cmdSync(argv: string[]): Promise<number> {
       limit: { type: 'string' },
       'no-summarize': { type: 'boolean' },
       only: { type: 'string' },
+      full: { type: 'boolean' },
       notify: { type: 'boolean' },
       quiet: { type: 'boolean' },
     },
@@ -125,7 +127,7 @@ async function cmdSync(argv: string[]): Promise<number> {
   const quiet = Boolean(values.quiet);
   const stamp = new Date().toISOString();
   if (quiet) out(`[${stamp}] sync`);
-  const connectors = await runConnectors(brain, cfg, { only: values.only?.split(',').map((x) => x.trim()) });
+  const connectors = await runConnectors(brain, cfg, { only: values.only?.split(',').map((x) => x.trim()), full: values.full });
   for (const r of connectors) {
     const name = r.name.padEnd(16);
     if (r.status === 'off') out(`${dim(name + '– off')}  ${dim(r.notes[0] ?? '')}`);
@@ -162,10 +164,14 @@ async function cmdSync(argv: string[]): Promise<number> {
 }
 
 async function cmdSummarize(argv: string[]): Promise<void> {
-  const { values } = parseArgs({ args: argv, options: { limit: { type: 'string' } } });
+  const { values } = parseArgs({ args: argv, options: { limit: { type: 'string' }, ids: { type: 'string' } } });
   const cfg = loadConfig();
   const brain = new Brain();
-  const s = await summarizePending(brain, cfg.summarizer, { limit: values.limit ? Number(values.limit) : undefined, log: (m) => out(dim(m)) });
+  const s = await summarizePending(brain, cfg.summarizer, {
+    limit: values.limit ? Number(values.limit) : undefined,
+    ids: values.ids?.split(',').map((x) => x.trim()).filter(Boolean),
+    log: (m) => out(dim(m)),
+  });
   out(`${s.summarized} note(s) written, ${s.failed} failed, ${s.remaining} still waiting. est. $${s.costUsd.toFixed(4)} at API list price.`);
   for (const e of s.errors.slice(0, 3)) out(red(`  ${e}`));
   brain.close();
@@ -353,6 +359,11 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 }
 
 if (isMain(import.meta.url)) {
+  // `second-brain search … | head` closes the pipe early; that's fine, not a crash.
+  process.stdout.on('error', (e: NodeJS.ErrnoException) => {
+    if (e.code === 'EPIPE') process.exit(0);
+    throw e;
+  });
   main()
     .then((code) => {
       if (code >= 0) process.exitCode = code;

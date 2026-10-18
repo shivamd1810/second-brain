@@ -84,6 +84,7 @@ test('second run reads only what was appended, and an active tail waits until id
   assert.equal(res.updated, 0);
   const second = brain.getRecord('cs-abcdef12-1')!;
   assert.match(second.body, /second task: add caching/);
+  assert.match(second.title, /\[demo-app\] second task: add caching/, "untitled sessions are named by the prompt");
   assert.match(second.body, /Added Redis caching/);
   assert.doesNotMatch(second.body, /first task/);
 
@@ -115,6 +116,12 @@ test('subagent transcripts are indexed with their parent title', async () => {
   const brain2 = memBrain();
   await claudeSessions.run({ brain: brain2, config: cfg, log: () => {}, now: later(60) });
   assert.equal(brain2.getRecord('sa-a1b2c3d4e5-0'), undefined);
+});
+
+test('worktree sessions are named after their repo', async () => {
+  const { projectName } = await import('../src/connectors/claude-sessions.ts');
+  assert.equal(projectName('/Users/me/code/shop/.claude/worktrees/agent-a7094', 'x'), 'shop');
+  assert.equal(projectName('/Users/me/code/shop', 'x'), 'shop');
 });
 
 test('chunking closes at a prompt after TARGET_CHARS and force-splits huge turns', () => {

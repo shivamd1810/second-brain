@@ -71,7 +71,7 @@ export interface SummarizeResult {
 export async function summarizePending(
   brain: Brain,
   cfg: SummarizerConfig,
-  opts: { limit?: number; log?: (m: string) => void; llm?: Llm } = {},
+  opts: { limit?: number; ids?: string[]; log?: (m: string) => void; llm?: Llm } = {},
 ): Promise<SummarizeResult> {
   const log = opts.log ?? (() => {});
   const llm = opts.llm ?? pickLlm(cfg);
@@ -86,7 +86,7 @@ export async function summarizePending(
     stoppedForCost: false,
   };
   if (!llm || limit <= 0) return result;
-  const records = brain.pending(limit);
+  const records = opts.ids?.length ? brain.pendingByIds(opts.ids) : brain.pending(limit);
   if (!records.length) return result;
   const batches = makeBatches(records, cfg.batchChars);
   const runId = brain.startRun('summarize');

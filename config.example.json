@@ -1,0 +1,58 @@
+{
+  "connectors": {
+    "claude-sessions": {
+      "enabled": true,
+      "projectsDir": "~/.claude/projects",
+      "includeSubagents": true,
+      "exclude": [],
+      "idleMinutes": 20
+    },
+    "git": {
+      "enabled": true,
+      "repos": [
+        "~/code/my-app",
+        "~/code/another-repo"
+      ],
+      "maxCommitsFirstRun": 500
+    },
+    "notes": {
+      "enabled": false,
+      "dirs": [
+        "~/notes"
+      ],
+      "extensions": [
+        ".md",
+        ".markdown",
+        ".txt"
+      ]
+    },
+    "gmail": {
+      "enabled": false,
+      "query": "-category:promotions -category:social -in:spam -in:trash",
+      "firstRunDays": 90,
+      "maxMessagesPerRun": 300
+    }
+  },
+  "summarizer": {
+    "backend": "auto",
+    "cliModel": "haiku",
+    "apiModel": "claude-haiku-5-5",
+    "maxRecordsPerRun": 200,
+    "maxCostUsdPerRun": 1,
+    "batchChars": 40000,
+    "concurrency": 3
+  },
+  "search": {
+    "recencyBoost": 0.5,
+    "halfLifeDays": 30
+  },
+  "health": {
+    "staleHours": 6,
+    "quietHours": {
+      "claude-sessions": 72,
+      "gmail": 48,
+      "git": 0,
+      "notes": 0
+    }
+  }
+}

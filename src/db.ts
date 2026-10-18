@@ -201,6 +201,17 @@ export class Brain {
       .all(limit) as unknown as StoredRecord[];
   }
 
+  /** Specific records that still need a note (for `summarize --ids`). */
+  pendingByIds(ids: string[]): StoredRecord[] {
+    if (!ids.length) return [];
+    return this.db
+      .prepare(
+        `SELECT * FROM records WHERE id IN (${ids.map(() => '?').join(',')})
+         AND (summary_hash IS NULL OR summary_hash != hash) ORDER BY date DESC`,
+      )
+      .all(...ids) as unknown as StoredRecord[];
+  }
+
   pendingCount(): number {
     const row = this.db
       .prepare('SELECT count(*) AS n FROM records WHERE summary_hash IS NULL OR summary_hash != hash')

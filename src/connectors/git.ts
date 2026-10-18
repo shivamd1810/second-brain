@@ -93,6 +93,7 @@ export const gitConnector: Connector = {
   async run(ctx: ConnectorContext): Promise<ConnectorResult> {
     const cfg = ctx.config.connectors.git;
     const state = ctx.brain.getState<State>('git', { repos: {} });
+    state.repos ??= {};
     let created = 0;
     let updated = 0;
     const notes: string[] = [];
@@ -133,10 +134,14 @@ export const gitConnector: Connector = {
       });
       created += repoNew;
       state.repos[repo] = rs;
-      notes.push(`${path.basename(repo)}: ${repoNew} new commit(s)`);
+      if (repoNew) notes.push(`${path.basename(repo)}: ${repoNew} new commit(s)`);
     }
     ctx.brain.setState('git', state);
     if (problems.length && problems.length === cfg.repos.length) throw new Error(problems.join('; '));
-    return { new: created, updated, notes: [...notes, ...problems.map((p) => `problem: ${p}`)] };
+    return {
+      new: created,
+      updated,
+      notes: [`${cfg.repos.length} repo(s) checked`, ...notes, ...problems.map((p) => `problem: ${p}`)],
+    };
   },
 };
