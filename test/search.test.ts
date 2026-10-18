@@ -77,3 +77,19 @@ test('doctor: a connector that never succeeded is STALE; a healthy one is OK', a
   const later = Date.now() + 7 * 3_600_000;
   assert.equal(Object.fromEntries(connectorHealth(brain, cfg, later).map((x) => [x.name, x]))['claude-sessions'].status, 'STALE');
 });
+
+test('a word that is everywhere in raw transcripts still counts in the notes', () => {
+  // "acme" appears in the raw text of most records, so raw-text BM25 gives it ~zero weight.
+  // The note index has its own word statistics, so the record whose note is about it wins.
+  const brain = memBrain();
+  const cfg = testConfig();
+  const now = new Date().toISOString();
+  for (let i = 0; i < 20; i++)
+    brain.upsertRecord({ id: `noise${i}`, source: 'notes', title: `Keep notes ${i}`, date: now, uri: 'x', body: `acme acme acme skills report ${i}` });
+  brain.upsertRecord({ id: 'decision', source: 'notes', title: 'Skill storage', date: now, uri: 'x', body: 'long transcript' });
+  const facts = { errors: [], fixes: [], commands: [], decisions: [{ decision: 'Keep the Acme skills in one GitHub repo', reason: 'zips had no history' }], keywords: ['acme skills'] };
+  brain.saveSummary('decision', brain.getRecord('decision')!.hash, { summary: 'Where the Acme skills live.', question: 'where do we keep the acme skills?', facts }, 'm');
+  const hits = search(brain, 'where do we keep the acme skills', cfg.search);
+  assert.equal(hits[0].id, 'decision');
+  assert.ok(hits[0].notes_rel > 0, 'won on the note, not the raw text');
+});

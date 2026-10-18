@@ -1,6 +1,7 @@
 // BM25 over the notes, times a small recency boost. No embeddings, no vector database.
 //
-//   relevance = -bm25(notes_fts, 3, 4, 2, 2, 0.25)     (SQLite returns lower = better)
+//   relevance = -bm25(notes_fts, 3, 4, 2, 2) + 0.25 * -bm25(raw_fts)   (SQLite: lower = better)
+//               notes: title, question, summary, facts      raw: the cleaned original text
 //   recency   = 1 + boost * 0.5 ^ (age_days / half_life_days)
 //   score     = relevance * recency
 //
@@ -10,8 +11,10 @@
 import type { Brain } from './db.ts';
 import type { SearchConfig } from './config.ts';
 
-/** Column weights for bm25(): title, question, summary, facts, raw body. */
-export const BM25_WEIGHTS = [3.0, 4.0, 2.0, 2.0, 0.25] as const;
+/** Column weights for bm25(notes_fts): title, question, summary, facts. */
+export const BM25_WEIGHTS = [3.0, 4.0, 2.0, 2.0] as const;
+/** How much a raw-text match counts next to a note match. */
+export const RAW_WEIGHT = 0.25;
 
 const STOPWORDS = new Set(
   `a an and are as at be been but by can could did do does doing done for from had has have how i if in into is it
@@ -61,7 +64,11 @@ export interface SearchHit {
   question: string | null;
   facts_json: string | null;
   summarized: boolean;
+  /** Combined relevance as a bm25()-style negative number (kept for compatibility). */
   bm25: number;
+  /** Relevance from the note fields and from the raw text, before weighting. */
+  notes_rel: number;
+  raw_rel: number;
   age_days: number;
   recency: number;
   score: number;
@@ -72,34 +79,46 @@ export function search(brain: Brain, query: string, cfg: SearchConfig, opts: Sea
   const fts = toFtsQuery(query);
   if (!fts) return [];
   const limit = Math.max(1, Math.min(opts.limit ?? 8, 50));
-  const where = ['notes_fts MATCH :q'];
+  const where: string[] = [];
   if (opts.source) where.push('r.source = :source');
   if (opts.since) where.push('r.date >= :since');
   const sql = `
-    WITH hits AS (
-      SELECT r.id, r.source, r.title, r.date, r.uri, r.summary, r.question, r.facts_json,
-             (r.summary_hash = r.hash) AS summarized,
-             bm25(notes_fts, ${BM25_WEIGHTS.join(', ')}) AS bm25,
-             max(0.0, julianday('now') - julianday(r.date)) AS age_days,
-             snippet(notes_fts, -1, '[', ']', ' … ', 16) AS snippet
-      FROM notes_fts JOIN records r ON r.rid = notes_fts.rowid
-      WHERE ${where.join(' AND ')}
-    )
-    SELECT *, 1.0 + :boost * pow(0.5, age_days / :half) AS recency,
-           -bm25 * (1.0 + :boost * pow(0.5, age_days / :half)) AS score
+    WITH n AS (SELECT rowid AS rid, -bm25(notes_fts, ${BM25_WEIGHTS.join(', ')}) AS rel FROM notes_fts WHERE notes_fts MATCH :q),
+         b AS (SELECT rowid AS rid, -bm25(raw_fts) AS rel FROM raw_fts WHERE raw_fts MATCH :q),
+         u AS (SELECT rid, sum(nrel) AS notes_rel, sum(brel) AS raw_rel
+               FROM (SELECT rid, rel AS nrel, 0.0 AS brel FROM n UNION ALL SELECT rid, 0.0, rel FROM b)
+               GROUP BY rid),
+         hits AS (
+           SELECT r.rid, r.id, r.source, r.title, r.date, r.uri, r.summary, r.question, r.facts_json,
+                  (r.summary_hash = r.hash) AS summarized, u.notes_rel, u.raw_rel,
+                  u.notes_rel + :raw * u.raw_rel AS relevance,
+                  max(0.0, julianday('now') - julianday(r.date)) AS age_days
+           FROM u JOIN records r ON r.rid = u.rid
+           ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+         )
+    SELECT *, -relevance AS bm25, 1.0 + :boost * pow(0.5, age_days / :half) AS recency,
+           relevance * (1.0 + :boost * pow(0.5, age_days / :half)) AS score
     FROM hits
     ORDER BY score DESC
     LIMIT :limit`;
   const params: Record<string, string | number> = {
     q: fts,
+    raw: RAW_WEIGHT,
     boost: cfg.recencyBoost,
     half: cfg.halfLifeDays,
     limit,
   };
   if (opts.source) params.source = opts.source;
   if (opts.since) params.since = opts.since;
-  const rows = brain.db.prepare(sql).all(params) as unknown as (Omit<SearchHit, 'summarized'> & { summarized: number })[];
-  return rows.map((r) => ({ ...r, summarized: Boolean(r.summarized) }));
+  type Row = Omit<SearchHit, 'summarized' | 'snippet'> & { rid: number; summarized: number };
+  const rows = brain.db.prepare(sql).all(params) as unknown as Row[];
+  // Snippets only for the few hits we return: from the note if it matched there, else the raw text.
+  const noteSnip = brain.db.prepare("SELECT snippet(notes_fts, -1, '[', ']', ' … ', 16) AS s FROM notes_fts WHERE notes_fts MATCH ? AND rowid = ?");
+  const rawSnip = brain.db.prepare("SELECT snippet(raw_fts, 0, '[', ']', ' … ', 16) AS s FROM raw_fts WHERE raw_fts MATCH ? AND rowid = ?");
+  return rows.map(({ rid, ...r }) => {
+    const snip = (r.notes_rel > 0 ? noteSnip : rawSnip).get(fts, rid) as { s: string } | undefined;
+    return { ...r, summarized: Boolean(r.summarized), snippet: snip?.s ?? '' };
+  });
 }
 
 /** Newest records first, no keywords: for "what was I working on last week?" questions. */
@@ -113,7 +132,7 @@ export function recent(brain: Brain, opts: { days?: number; limit?: number; sour
   const rows = brain.db
     .prepare(
       `SELECT r.id, r.source, r.title, r.date, r.uri, r.summary, r.question, r.facts_json,
-              (r.summary_hash = r.hash) AS summarized, 0.0 AS bm25,
+              (r.summary_hash = r.hash) AS summarized, 0.0 AS bm25, 0.0 AS notes_rel, 0.0 AS raw_rel,
               max(0.0, julianday('now') - julianday(r.date)) AS age_days, 1.0 AS recency, 0.0 AS score,
               substr(r.body, 1, 300) AS snippet
        FROM records r WHERE ${where.join(' AND ')}

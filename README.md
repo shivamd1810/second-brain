@@ -209,28 +209,42 @@ These are planned but not built, because their file formats couldn't be checked 
 
 ## How ranking works
 
+There are two FTS5 indexes in the same file: `notes_fts` over the notes (title, the question
+you'd type, summary, facts) and `raw_fts` over the cleaned original text.
+
 ```
-relevance = -bm25(notes_fts, 3.0, 4.0, 2.0, 2.0, 0.25)    -- title, question, summary, facts, raw text
+relevance = -bm25(notes_fts, 3.0, 4.0, 2.0, 2.0) + 0.25 × -bm25(raw_fts)
 recency   = 1 + 0.5 × 0.5 ^ (age_in_days / 30)
 score     = relevance × recency
 ```
 
 A record from today gets ×1.5, one from a month ago ×1.25, one from three months ago ×1.06. So
 newer wins ties and older slowly fades, but a much better text match still beats a newer weak
-one. The note fields carry most of the weight; the raw text is a low-weight fallback, which
-also makes records searchable before their note is written. Tune `search.recencyBoost` and
-`search.halfLifeDays` in the config. Your words are OR'ed together (BM25 rewards records that
-match more of them), stemmed (`switching` finds `switched`), and `"quoted phrases"` stay phrases.
+one. Tune `search.recencyBoost` and `search.halfLifeDays` in the config.
 
-You can run the same query yourself:
+Why two indexes: BM25 gives almost no weight to a word that appears in most documents. In raw
+transcripts, words like your company or main tool show up nearly everywhere, so they stop
+counting. The short notes have their own word counts, so the same word still matters there.
+The raw index is a low-weight fallback, which also makes records searchable before their note
+is written.
+
+Your words are OR'ed together (BM25 rewards records that match more of them), stemmed
+(`switching` finds `switched`), common filler words are dropped, and `"quoted phrases"` stay
+phrases. `second-brain search … --explain` prints each part of the score.
+
+You can run the same BM25 yourself:
 
 ```bash
-sqlite3 ~/.second-brain/brain.db "
-  SELECT date(r.date), round(-bm25(notes_fts, 3, 4, 2, 2, 0.25), 2) AS bm25, r.title
+sqlite3 -header -column ~/.second-brain/brain.db "
+  SELECT date(r.date) AS day, round(-bm25(notes_fts, 3, 4, 2, 2), 2) AS bm25, substr(r.title, 1, 60) AS title
   FROM notes_fts JOIN records r ON r.rid = notes_fts.rowid
   WHERE notes_fts MATCH 'postgres OR migration'
-  ORDER BY bm25(notes_fts, 3, 4, 2, 2, 0.25) LIMIT 5;"
+  ORDER BY bm25(notes_fts, 3, 4, 2, 2) LIMIT 5;"
 ```
+
+`npm run bench` times searches on your own brain. On a Mac with ~1,500 records: about 2 ms per
+query, about 6 ms per MCP `search_memory` call, and about 135 ms for the whole CLI command
+(mostly starting Node).
 
 ## The notes (summarizer)
 
@@ -387,6 +401,7 @@ agent stops to ask before each config change should expect 3–5 minutes. Gmail 
 npm test            # node:test, no network, fake model
 npm run typecheck   # tsc --noEmit
 npm run smoke -- "some words"   # real stdio MCP client against your brain
+npm run bench                   # search latency: in-process, MCP call, CLI
 ```
 
 Node runs the `.ts` files directly (type stripping), so there is no build step.

@@ -12,7 +12,7 @@ import { hitsToText, recordToText, parseFacts } from './format.ts';
 import { ago, connectorHealth, isUnhealthy, notify } from './health.ts';
 import { pickLlm, resolveBackend } from './llm.ts';
 import * as schedule from './schedule.ts';
-import { recent, search } from './search.ts';
+import { RAW_WEIGHT, recent, search } from './search.ts';
 import { summarizePending } from './summarize.ts';
 import { runConnectors } from './sync.ts';
 import { isMain, stableNodePath } from './util.ts';
@@ -223,7 +223,7 @@ function cmdSearch(argv: string[]): void {
     hits.forEach((h, i) => {
       const rank = cyan(`#${i + 1}`);
       const score = values.explain
-        ? `score ${h.score.toFixed(2)} = bm25 ${(-h.bm25).toFixed(2)} × recency ${h.recency.toFixed(2)} (${h.age_days.toFixed(0)} d old)`
+        ? `score ${h.score.toFixed(2)} = bm25 ${(-h.bm25).toFixed(2)} × recency ${h.recency.toFixed(2)} (${h.age_days.toFixed(0)} d old) · bm25 = notes ${h.notes_rel.toFixed(2)} + ${RAW_WEIGHT} × raw ${h.raw_rel.toFixed(2)}`
         : `score ${h.score.toFixed(2)}`;
       out(`${rank} ${bold(h.date.slice(0, 10))} ${yellow(h.source)}  ${h.title}`);
       out(`   ${dim(score + ' · ' + h.id)}`);
@@ -286,7 +286,7 @@ function cmdDoctor(): number {
   out(`summarizer      ${llmLine}${pending ? dim(`  · ${pending} record(s) waiting for notes`) : ''}`);
   const sched = process.platform === 'win32' ? dim('Windows: see README → Scheduling') : schedule.isInstalled() ? green(process.platform === 'darwin' ? 'launchd job installed' : 'cron job installed') : dim('not installed (second-brain schedule install, or sync --watch)');
   out(`schedule        ${sched}`);
-  const fts = brain.db.prepare("SELECT count(*) AS n FROM notes_fts WHERE notes_fts MATCH 'a OR the OR error'").get() as { n: number };
+  const fts = brain.db.prepare("SELECT count(*) AS n FROM raw_fts WHERE raw_fts MATCH 'a OR the OR error'").get() as { n: number };
   out(`index           ${green('FTS5 + bm25 ok')}${dim(`  · sqlite ${(brain.db.prepare('select sqlite_version() v').get() as { v: string }).v} · probe hits ${fts.n}`)}`);
   const bad = health.filter(isUnhealthy);
   if (bad.length) {

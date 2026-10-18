@@ -77,25 +77,39 @@ CREATE TABLE IF NOT EXISTS records (
 CREATE INDEX IF NOT EXISTS records_source_date ON records(source, date);
 CREATE INDEX IF NOT EXISTS records_pending ON records(summary_hash, hash);
 
--- Plain-text index. bm25() ranks matches; external content keeps one copy of the text.
+-- Two plain-text indexes; bm25() ranks matches, external content keeps one copy of the text.
+-- notes_fts holds the short notes (and titles), so word statistics come from the notes:
+-- a word that appears in most raw transcripts ("react", "error") still counts in a note.
+-- raw_fts holds the cleaned originals as a low-weight fallback (and for records without notes).
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
-  title, question, summary, facts, body,
+  title, question, summary, facts,
+  content='records', content_rowid='rid',
+  tokenize='porter unicode61 remove_diacritics 2'
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS raw_fts USING fts5(
+  body,
   content='records', content_rowid='rid',
   tokenize='porter unicode61 remove_diacritics 2'
 );
 CREATE TRIGGER IF NOT EXISTS records_ai AFTER INSERT ON records BEGIN
-  INSERT INTO notes_fts(rowid, title, question, summary, facts, body)
-  VALUES (new.rid, new.title, new.question, new.summary, new.facts, new.body);
+  INSERT INTO notes_fts(rowid, title, question, summary, facts)
+  VALUES (new.rid, new.title, new.question, new.summary, new.facts);
+  INSERT INTO raw_fts(rowid, body) VALUES (new.rid, new.body);
 END;
 CREATE TRIGGER IF NOT EXISTS records_ad AFTER DELETE ON records BEGIN
-  INSERT INTO notes_fts(notes_fts, rowid, title, question, summary, facts, body)
-  VALUES ('delete', old.rid, old.title, old.question, old.summary, old.facts, old.body);
+  INSERT INTO notes_fts(notes_fts, rowid, title, question, summary, facts)
+  VALUES ('delete', old.rid, old.title, old.question, old.summary, old.facts);
+  INSERT INTO raw_fts(raw_fts, rowid, body) VALUES ('delete', old.rid, old.body);
 END;
-CREATE TRIGGER IF NOT EXISTS records_au AFTER UPDATE ON records BEGIN
-  INSERT INTO notes_fts(notes_fts, rowid, title, question, summary, facts, body)
-  VALUES ('delete', old.rid, old.title, old.question, old.summary, old.facts, old.body);
-  INSERT INTO notes_fts(rowid, title, question, summary, facts, body)
-  VALUES (new.rid, new.title, new.question, new.summary, new.facts, new.body);
+CREATE TRIGGER IF NOT EXISTS records_au_notes AFTER UPDATE OF title, question, summary, facts ON records BEGIN
+  INSERT INTO notes_fts(notes_fts, rowid, title, question, summary, facts)
+  VALUES ('delete', old.rid, old.title, old.question, old.summary, old.facts);
+  INSERT INTO notes_fts(rowid, title, question, summary, facts)
+  VALUES (new.rid, new.title, new.question, new.summary, new.facts);
+END;
+CREATE TRIGGER IF NOT EXISTS records_au_raw AFTER UPDATE OF body ON records BEGIN
+  INSERT INTO raw_fts(raw_fts, rowid, body) VALUES ('delete', old.rid, old.body);
+  INSERT INTO raw_fts(rowid, body) VALUES (new.rid, new.body);
 END;
 
 CREATE TABLE IF NOT EXISTS connectors (
@@ -138,11 +152,27 @@ export class Brain {
     if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;');
+    this.migrate();
     this.db.exec(SCHEMA);
+    if (this.rebuildIndex) {
+      // Re-fill the new indexes from the records table (FTS5 external-content 'rebuild').
+      this.db.exec("INSERT INTO notes_fts(notes_fts) VALUES('rebuild'); INSERT INTO raw_fts(raw_fts) VALUES('rebuild');");
+    }
     if (file !== ':memory:') {
       try {
         fs.chmodSync(file, 0o600);
       } catch {}
+    }
+  }
+
+  private rebuildIndex = false;
+
+  /** v1 kept the raw text in notes_fts; v2 splits it into notes_fts + raw_fts. */
+  private migrate(): void {
+    const old = this.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'notes_fts'").get() as { sql: string } | undefined;
+    if (old && /\bbody\b/.test(old.sql)) {
+      this.db.exec('DROP TRIGGER IF EXISTS records_ai; DROP TRIGGER IF EXISTS records_ad; DROP TRIGGER IF EXISTS records_au; DROP TABLE notes_fts;');
+      this.rebuildIndex = true;
     }
   }
 
