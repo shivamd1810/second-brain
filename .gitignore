@@ -1,0 +1,13 @@
+node_modules/
+# Never commit personal data. The real data dir lives in ~/.second-brain,
+# but guard against someone pointing SECOND_BRAIN_HOME inside the repo.
+.second-brain/
+data/
+*.db
+*.db-wal
+*.db-shm
+credentials.json
+token.json
+*.log
+.env
+.DS_Store

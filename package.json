@@ -1,0 +1,42 @@
+{
+  "name": "second-brain",
+  "version": "0.1.0",
+  "description": "A local, plain-text second brain for coding agents: connectors pull your own data, a cheap model takes notes, SQLite FTS5 (BM25) searches it, and one MCP server shares it with Claude Code, Gemini CLI and Codex.",
+  "type": "module",
+  "bin": {
+    "second-brain": "src/cli.ts"
+  },
+  "scripts": {
+    "brain": "node src/cli.ts",
+    "mcp": "node src/mcp.ts",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "files": [
+    "src",
+    "config.example.json"
+  ],
+  "keywords": [
+    "second-brain",
+    "mcp",
+    "claude-code",
+    "gemini-cli",
+    "codex",
+    "sqlite",
+    "fts5",
+    "bm25"
+  ],
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}
