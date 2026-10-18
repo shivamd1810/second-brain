@@ -55,7 +55,7 @@ export function connectorHealth(brain: Brain, cfg: Config, now = Date.now()): Co
       return {
         ...base,
         status: 'STALE' as Status,
-        detail: `no successful sync for ${Number.isFinite(sinceOk) ? Math.round(sinceOk) + ' h' : 'ever'}${row.last_error ? ` (last error: ${row.last_error})` : ''}`,
+        detail: `${Number.isFinite(sinceOk) ? `no successful sync for ${Math.round(sinceOk)} h` : 'never synced successfully'}${row.last_error ? ` (last error: ${row.last_error})` : ''}`,
       };
     if (row.last_status === 'error') return { ...base, status: 'ERROR' as Status, detail: row.last_error ?? 'last run failed' };
     const quiet = cfg.health.quietHours[c.name] ?? 0;
@@ -63,7 +63,7 @@ export function connectorHealth(brain: Brain, cfg: Config, now = Date.now()): Co
     // Only call it quiet once we have watched it for that long.
     const watched = hoursSince(firstRun(brain, c.name), now);
     if (quiet > 0 && sinceNew > quiet && watched > quiet)
-      return { ...base, status: 'QUIET' as Status, detail: `nothing new for ${Number.isFinite(sinceNew) ? Math.round(sinceNew) + ' h' : 'ever'}` };
+      return { ...base, status: 'QUIET' as Status, detail: Number.isFinite(sinceNew) ? `nothing new for ${Math.round(sinceNew)} h` : 'has never brought in anything new' };
     return { ...base, status: 'OK' as Status, detail: c.describe(cfg) };
   });
 }

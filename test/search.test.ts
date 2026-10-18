@@ -57,3 +57,23 @@ test('updating a record re-indexes it and marks it for a new note', () => {
   assert.equal(search(brain, 'redis', cfg.search).length, 0);
   assert.equal(search(brain, 'valkey', cfg.search).length, 1);
 });
+
+test('doctor: a connector that never succeeded is STALE; a healthy one is OK', async () => {
+  const { connectorHealth } = await import('../src/health.ts');
+  const brain = memBrain();
+  const cfg = testConfig((c) => {
+    c.connectors.gmail.enabled = true;
+  });
+  const ok = brain.startRun('claude-sessions');
+  brain.finishRun(ok, 'claude-sessions', { status: 'ok', newCount: 3 });
+  const bad = brain.startRun('gmail');
+  brain.finishRun(bad, 'gmail', { status: 'error', error: 'token revoked' });
+  const h = Object.fromEntries(connectorHealth(brain, cfg).map((x) => [x.name, x]));
+  assert.equal(h['claude-sessions'].status, 'OK');
+  assert.equal(h.gmail.status, 'STALE');
+  assert.match(h.gmail.detail, /never synced successfully \(last error: token revoked\)/);
+  assert.equal(h.notes.status, 'OFF');
+  // A long silence after a good run is STALE too.
+  const later = Date.now() + 7 * 3_600_000;
+  assert.equal(Object.fromEntries(connectorHealth(brain, cfg, later).map((x) => [x.name, x]))['claude-sessions'].status, 'STALE');
+});
