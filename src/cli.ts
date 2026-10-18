@@ -10,7 +10,7 @@ import { gmailAuth } from './connectors/gmail.ts';
 import { Brain } from './db.ts';
 import { hitsToText, recordToText, parseFacts } from './format.ts';
 import { ago, connectorHealth, isUnhealthy, notify } from './health.ts';
-import { pickLlm } from './llm.ts';
+import { pickLlm, resolveBackend } from './llm.ts';
 import * as schedule from './schedule.ts';
 import { recent, search } from './search.ts';
 import { summarizePending } from './summarize.ts';
@@ -35,7 +35,7 @@ Usage: second-brain <command> [options]
 
   init [--git <repo>…] [--scan <dir>] [--notes <dir>…] [--no-subagents]
                          create ${'~/.second-brain/config.json'}
-  sync [--limit N] [--no-summarize] [--only a,b] [--full] [--notify] [--quiet]
+  sync [--limit N] [--no-summarize] [--only a,b] [--full] [--notify] [--quiet] [--watch [--every 15]]
                          pull only what's new from each source, then write notes
                          (--full re-reads sources from scratch; unchanged records keep their notes)
   summarize [--limit N] [--ids a,b]  write notes for records still waiting (resumable)
@@ -48,6 +48,7 @@ Usage: second-brain <command> [options]
   mcp-config             print the one-line registration for Claude Code, Gemini CLI, Codex
   gmail-auth             one-time browser consent for read-only Gmail
   schedule install|uninstall|status|print [--every 15]
+                         macOS launchd, Linux crontab, Windows: prints a schtasks command
 
 Data: ${dataDir()} (override with SECOND_BRAIN_HOME)`;
 
@@ -120,8 +121,24 @@ async function cmdSync(argv: string[]): Promise<number> {
       full: { type: 'boolean' },
       notify: { type: 'boolean' },
       quiet: { type: 'boolean' },
+      watch: { type: 'boolean' },
+      every: { type: 'string' },
     },
   });
+  if (values.watch) {
+    // Portable scheduler: keep running and sync every N minutes (any OS, no cron needed).
+    const every = Number(values.every ?? 15);
+    const rest = argv.filter((a, i) => a !== '--watch' && a !== '--every' && argv[i - 1] !== '--every');
+    out(`Syncing every ${every} min. Ctrl-C to stop.`);
+    for (;;) {
+      try {
+        await cmdSync([...rest, '--quiet']);
+      } catch (e) {
+        out(red(`sync failed: ${(e as Error).message}`));
+      }
+      await new Promise((r) => setTimeout(r, every * 60_000));
+    }
+  }
   const cfg = loadConfig();
   const brain = new Brain();
   const quiet = Boolean(values.quiet);
@@ -144,7 +161,7 @@ async function cmdSync(argv: string[]): Promise<number> {
       log: (m) => out(quiet ? `  ${m}` : dim(m)),
     });
     if (s.summarized || s.failed) {
-      out(`${'summaries'.padEnd(16)}${s.failed ? yellow('!') : green('✓')} ${bold(String(s.summarized))} written with ${s.model}${s.failed ? `, ${s.failed} failed` : ''}  ${dim(`(est. $${s.costUsd.toFixed(4)} at API list price)`)}`);
+      out(`${'summaries'.padEnd(16)}${s.failed ? yellow('!') : green('✓')} ${bold(String(s.summarized))} written with ${s.model}${s.failed ? `, ${s.failed} failed` : ''}  ${s.costUsd > 0 ? dim(`(est. $${s.costUsd.toFixed(4)} at API list price)`) : ''}`);
       for (const e of s.errors.slice(0, 2)) out(red(`${' '.repeat(18)}${e}`));
       if (s.stoppedForCost) out(yellow(`${' '.repeat(18)}stopped at the cost cap ($${cfg.summarizer.maxCostUsdPerRun}); next sync continues`));
     }
@@ -172,7 +189,7 @@ async function cmdSummarize(argv: string[]): Promise<void> {
     ids: values.ids?.split(',').map((x) => x.trim()).filter(Boolean),
     log: (m) => out(dim(m)),
   });
-  out(`${s.summarized} note(s) written, ${s.failed} failed, ${s.remaining} still waiting. est. $${s.costUsd.toFixed(4)} at API list price.`);
+  out(`${s.summarized} note(s) written, ${s.failed} failed, ${s.remaining} still waiting.${s.costUsd > 0 ? ` est. $${s.costUsd.toFixed(4)} at API list price.` : ''}`);
   for (const e of s.errors.slice(0, 3)) out(red(`  ${e}`));
   brain.close();
 }
@@ -257,10 +274,18 @@ function cmdDoctor(): number {
     );
   }
   const pending = brain.pendingCount();
-  const llm = pickLlm(cfg.summarizer);
+  const { backend, why } = resolveBackend(cfg.summarizer);
+  let llmLine: string;
+  try {
+    const llm = pickLlm(cfg.summarizer);
+    llmLine = llm ? `${llm.name} (${llm.model})${dim(`  · ${why}`)}` : yellow('none') + dim(`  · ${why}`);
+  } catch (e) {
+    llmLine = red(`${backend}: ${(e as Error).message}`);
+  }
   out('');
-  out(`summarizer      ${llm ? `${llm.name} (${llm.model})` : 'off'}${pending ? dim(`  · ${pending} record(s) waiting for notes`) : ''}`);
-  out(`schedule        ${process.platform === 'darwin' ? (schedule.isInstalled() ? green('launchd job installed') : dim('not installed (second-brain schedule install)')) : dim('use cron: second-brain schedule print')}`);
+  out(`summarizer      ${llmLine}${pending ? dim(`  · ${pending} record(s) waiting for notes`) : ''}`);
+  const sched = process.platform === 'win32' ? dim('Windows: see README → Scheduling') : schedule.isInstalled() ? green(process.platform === 'darwin' ? 'launchd job installed' : 'cron job installed') : dim('not installed (second-brain schedule install, or sync --watch)');
+  out(`schedule        ${sched}`);
   const fts = brain.db.prepare("SELECT count(*) AS n FROM notes_fts WHERE notes_fts MATCH 'a OR the OR error'").get() as { n: number };
   out(`index           ${green('FTS5 + bm25 ok')}${dim(`  · sqlite ${(brain.db.prepare('select sqlite_version() v').get() as { v: string }).v} · probe hits ${fts.n}`)}`);
   const bad = health.filter(isUnhealthy);
@@ -291,13 +316,14 @@ function cmdMcpConfig(): void {
 function cmdSchedule(argv: string[]): void {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { every: { type: 'string' } } });
   const every = Number(values.every ?? 15);
+  if (!(every >= 1 && every <= 59)) throw new Error('--every must be between 1 and 59 minutes');
   const action = positionals[0] ?? 'status';
-  if (action === 'print') out(process.platform === 'darwin' ? schedule.buildPlist(every) : schedule.cronLine(every));
-  else if (action === 'install') out(`Installed ${schedule.install(every)} — sync runs every ${every} min. Logs: ${path.join(dataDir(), 'logs', 'sync.log')}`);
+  if (action === 'print') out(schedule.printable(every));
+  else if (action === 'install') out(`Installed in ${schedule.install(every)}: sync runs every ${every} min. Logs: ${path.join(dataDir(), 'logs', 'sync.log')}`);
   else if (action === 'uninstall') {
     schedule.uninstall();
-    out('Removed the launchd job.');
-  } else out(schedule.isInstalled() ? `installed: ${schedule.plistPath()}` : 'not installed');
+    out('Removed the scheduled sync.');
+  } else out(schedule.isInstalled() ? 'installed' : 'not installed (second-brain schedule install, or sync --watch)');
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<number> {

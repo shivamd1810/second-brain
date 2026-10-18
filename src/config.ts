@@ -35,8 +35,13 @@ export interface GmailConfig {
 }
 
 export interface SummarizerConfig {
-  /** "auto" = Anthropic API if ANTHROPIC_API_KEY is set, else the `claude` CLI. */
-  backend: 'auto' | 'claude-cli' | 'anthropic-api' | 'none';
+  /**
+   * "auto" = Anthropic API if ANTHROPIC_API_KEY is set, else the `claude` CLI if installed,
+   * else `command` if set, else none (search falls back to raw text).
+   */
+  backend: 'auto' | 'claude-cli' | 'anthropic-api' | 'command' | 'none';
+  /** For backend "command": a shell command that reads the prompt on stdin and prints JSON. */
+  command: string;
   /** Model for the claude CLI backend (alias or full id). */
   cliModel: string;
   /** Model for the Anthropic API backend. */
@@ -94,6 +99,7 @@ export const DEFAULT_CONFIG: Config = {
   },
   summarizer: {
     backend: 'auto',
+    command: '',
     cliModel: 'haiku',
     apiModel: 'claude-haiku-5-5',
     maxRecordsPerRun: 200,

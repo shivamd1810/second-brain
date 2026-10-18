@@ -68,8 +68,19 @@ Everything runs on your machine except the note-taking calls, which go to Anthro
 The fastest way: paste [SETUP_PROMPT.md](SETUP_PROMPT.md) into Claude Code and let it do the
 steps below with you. Or do them by hand.
 
-You need **Node 22.18+**, **git**, and **Claude Code** (logged in). The notes are written with
-`claude -p --model haiku`, which uses your existing Claude Code login. No API key needed.
+You need:
+
+- **Node.js 22.18 or newer** (any current LTS: 22, 24, or 26). Tested on 22.18.0, 22.23, 24.22
+  and 26.0. Node runs the TypeScript files directly and has SQLite built in, so there is nothing
+  to compile. `npm install` stops with a clear error on older Node.
+- **git**.
+- **A cheap model for the notes**, one of: Claude Code logged in (default: `claude -p --model
+  haiku`, no API key), an `ANTHROPIC_API_KEY`, or any command that reads a prompt and prints
+  JSON (Gemini CLI, Codex, Ollama…; see [The notes](#the-notes-summarizer)). Without any of
+  these it still works: search falls back to the raw text.
+
+Tested on macOS. Linux uses the same code paths (cron instead of launchd). Windows hasn't been
+tested; WSL is the safe route there.
 
 ```bash
 git clone https://github.com/OWNER/second-brain ~/second-brain
@@ -144,6 +155,7 @@ the agent can tell you.
 ```
 second-brain init [--git <repo>…] [--scan <dir>] [--notes <dir>…] [--no-subagents] [--gmail]
 second-brain sync [--limit N] [--no-summarize] [--only claude-sessions,git] [--full] [--notify] [--quiet]
+second-brain sync --watch [--every 15]   # portable scheduler: stays running, syncs every N minutes
 second-brain summarize [--limit N] [--ids a,b]   # notes for records still waiting; safe to stop and resume
 second-brain search <words…> [--limit N] [--source S] [--since 2026-09-01] [--explain] [--json]
 second-brain recent [--days 7] [--source S]
@@ -153,7 +165,7 @@ second-brain stats
 second-brain mcp                         # run the MCP server (what agents start)
 second-brain mcp-config                  # print the registration lines
 second-brain gmail-auth                  # one-time Google consent (read-only)
-second-brain schedule install|uninstall|status|print [--every 15]
+second-brain schedule install|uninstall|status|print [--every 15]   # launchd / crontab / schtasks
 ```
 
 Data lives in `~/.second-brain` (override with `SECOND_BRAIN_HOME`): `config.json`, `brain.db`,
@@ -183,6 +195,17 @@ commits newer than the last one seen. Links point to GitHub when the remote is o
 re-read only when its size or modification time changes.
 
 **gmail** (optional) uses the Gmail API with the `gmail.readonly` scope only. See below.
+
+### More sources (not built yet)
+
+Each connector is one file implementing the small `Connector` interface in
+[src/connectors/types.ts](src/connectors/types.ts), so adding a source is mostly parsing.
+These are planned but not built, because their file formats couldn't be checked against real data:
+
+- **Codex CLI sessions**: rollout files under `~/.codex/sessions/`. TODO.
+- **Gemini CLI chats**: saved chats under `~/.gemini/tmp/<project>/chats/` and the prompt log
+  `~/.gemini/tmp/<project>/logs.json`. TODO.
+- Slack, call transcripts, browser history: TODO.
 
 ## How ranking works
 
@@ -216,16 +239,41 @@ For each new record, Claude Haiku returns JSON with `summary`, `question`, `erro
 per call, about 40,000 characters), run 3 calls at a time, and each note is saved as soon as
 it arrives, so a stopped run picks up where it left off.
 
-| Backend | When | Model |
+| Backend | Picked by `"auto"` when | Model |
 |---------|------|-------|
-| `claude-cli` (default) | `claude` is installed and logged in | `claude -p --model haiku` with no tools, no session saved, hooks/plugins/MCP off |
-| `anthropic-api` | `ANTHROPIC_API_KEY` is set (or `summarizer.backend = "anthropic-api"`) | `claude-haiku-5-5` via the Anthropic SDK |
-| `none` | `summarizer.backend = "none"` | no notes; search uses the raw text |
+| `anthropic-api` | `ANTHROPIC_API_KEY` is set | `claude-haiku-5-5` via the Anthropic SDK |
+| `claude-cli` | `claude` is on your PATH | `claude -p --model haiku` with no tools, no session saved, hooks/plugins/MCP off |
+| `command` | `summarizer.command` is set | whatever your command runs |
+| `none` | none of the above | no notes; search uses the raw text |
+
+`second-brain doctor` shows which one is in use and why. Set `summarizer.backend` to force one.
+
+**Bring your own model (`command`).** Any shell command that reads the prompt on stdin and prints
+the model's reply on stdout works. The prompt asks for JSON and the reply is parsed leniently
+(markdown fences and chatter around the JSON are fine, missing fields default to empty). In
+`~/.second-brain/config.json`:
+
+```json
+"summarizer": { "backend": "command", "command": "ollama run qwen2.5:7b" }
+```
+
+Other examples. Only the first was tested here; check your tool's flags, and pick a small/cheap
+model with its model flag:
+
+| Tool | `summarizer.command` |
+|------|----------------------|
+| Claude Code (as a plain command) | `claude -p --model haiku --no-session-persistence --tools "" --safe-mode "Write the notes now."` |
+| Gemini CLI | `gemini -p "Write the notes now."` (`-p` is appended to stdin) |
+| Codex CLI | `codex exec -` (reads the prompt from stdin) |
+| Ollama (local, nothing leaves your machine) | `ollama run qwen2.5:7b` |
+| [llm](https://llm.datasette.io) | `llm -m <model>` |
+
+Cost isn't reported for `command`, so only `maxRecordsPerRun` caps it.
 
 Caps: `summarizer.maxRecordsPerRun` (200) and `summarizer.maxCostUsdPerRun` ($1.00) per sync.
 
 **Cost.** Measured on real sessions: about **$0.0015 per record** at API list prices
-(50 records ≈ $0.075). A first full pass over ~1,450 records is about $2. With the default
+(50 records ≈ $0.075), so a first full pass over a thousand records is about $1.50. With the default
 `claude-cli` backend this comes out of your Claude plan's usage instead of an API bill.
 
 ## Keep it alive
@@ -239,16 +287,31 @@ connector, the last successful sync, how many new records the last run brought, 
 - **QUIET**: running fine but nothing new for `health.quietHours[connector]` hours
   (claude-sessions 72, gmail 48; 0 turns it off).
 
-Run it on a schedule (macOS):
+### Scheduling
 
-```bash
-second-brain schedule install      # launchd, every 15 minutes, logs in ~/.second-brain/logs
-second-brain schedule uninstall
-```
+Connectors should run on a schedule; every 15 minutes is plenty.
 
-Each scheduled sync runs the health check and shows a macOS notification if a connector is
-STALE or failing, so you hear about it the same day. On Linux, `second-brain schedule print`
-gives you a cron line.
+| OS | Command | What it does |
+|----|---------|--------------|
+| macOS | `second-brain schedule install` | a launchd job (`~/Library/LaunchAgents/com.second-brain.sync.plist`) |
+| Linux | `second-brain schedule install` | one line in your crontab, marked `# second-brain-sync`; your other cron jobs are left alone |
+| Windows | `second-brain schedule print` | prints a `schtasks` command to run once (see below) |
+| Any | `second-brain sync --watch --every 15` | keeps running in a terminal and syncs every 15 minutes |
+
+`second-brain schedule uninstall` removes it again (macOS and Linux), `schedule print` shows
+exactly what would be installed, and `--every N` changes the interval. Logs go to
+`~/.second-brain/logs/sync.log`.
+
+Each scheduled sync runs the health check. On macOS (and on Linux if `notify-send` is installed)
+it shows a desktop notification when a connector is STALE or failing, so you hear about it the
+same day.
+
+**Windows (untested).** Either run the `schtasks` line that `second-brain schedule print` gives you,
+or open **Task Scheduler → Create Basic Task**: trigger *Daily*, then in the task's properties set
+*Repeat task every 15 minutes, for a duration of Indefinitely*; action *Start a program* with
+program `node.exe` (full path from `where node`) and arguments
+`C:\path\to\second-brain\src\cli.ts sync --quiet`. Remove it with
+`schtasks /Delete /TN "second-brain sync" /F`.
 
 ## Gmail (optional)
 
@@ -276,26 +339,31 @@ in that email. If the token expires or you revoke access, `doctor` shows gmail a
 
 ## Privacy
 
-- Your data stays in `~/.second-brain` on your machine: never inside this repo, never uploaded
-  anywhere by this code. The `.gitignore` also blocks `*.db`, `credentials.json` and `token.json`.
-- **Writing notes sends each record's text to Anthropic** through your own Claude account
-  (`claude -p`) or your API key. That includes session transcripts, commit messages and, if you
-  turn it on, email bodies. If that's not OK for some data, exclude it (`connectors["claude-sessions"].exclude`
-  takes path substrings), or set `summarizer.backend` to `"none"`.
+- Your data stays in `~/.second-brain` on your machine (or wherever `SECOND_BRAIN_HOME` points):
+  never inside this repo, never uploaded anywhere by the indexer. The `.gitignore` also blocks
+  the data dir, `*.db`, `credentials.json`, tokens and `.env` files, in case you point things
+  at the repo by mistake.
+- **Writing notes sends each record's text to the model you chose**: Anthropic for `claude-cli`
+  (your own Claude account) and `anthropic-api` (your key), or whatever your `command` calls. That
+  includes session transcripts, commit messages and, if you turn it on, email bodies. If that's
+  not OK for some data, exclude it (`connectors["claude-sessions"].exclude` takes path
+  substrings), use a local model through `command` (e.g. Ollama), or set `summarizer.backend` to
+  `"none"`.
 - All connectors are read-only. Gmail uses the `gmail.readonly` scope and refuses a token with
   any other scope.
-- The note-taking model runs with no tools, and its prompt treats record text as data, so text
-  inside an old session or email can't make it do anything. The worst it can do is write a bad
-  note.
+- With `claude-cli` and `anthropic-api` the note-taking model has no tools, and its prompt treats
+  record text as data, so text inside an old session or email can't make it run anything; the
+  worst case is a bad note. With `command`, that depends on your command: prefer one with tools
+  turned off.
 - The MCP server only reads. It runs locally over stdio; nothing listens on a port.
 
 ## Setup time
 
 Measured on a MacBook (Node 26, Claude Code 2.1.302) with a fresh clone and an empty data dir,
 following [SETUP_PROMPT.md](SETUP_PROMPT.md) step by step with an agent driving: **116 seconds**
-from the prerequisite check to the first answer from memory in Claude Code. That run indexed
-1,456 records (1,378 session parts from 1,079 transcript files, 78 commits from 9 repos) in about
-5 seconds, and writing the first 25 notes took about 80 seconds. A first-time viewer whose
+from the prerequisite check to the first answer from memory in Claude Code. Indexing about a
+thousand session transcripts (750 MB) and a few hundred commits took about 5 seconds; writing the
+first 25 notes took about 80 seconds. A first-time viewer whose
 agent stops to ask before each config change should expect 3–5 minutes. Gmail adds about 10.
 
 ## Troubleshooting
@@ -303,7 +371,8 @@ agent stops to ask before each config change should expect 3–5 minutes. Gmail 
 | Problem | Fix |
 |---------|-----|
 | `could not run "claude"` | Install Claude Code and log in, or set `ANTHROPIC_API_KEY`, or `summarizer.backend = "none"`. Under launchd/cron, `schedule install` already puts `claude` on the PATH; set `SECOND_BRAIN_CLAUDE=/path/to/claude` if yours lives elsewhere. |
-| `no such module: fts5` or `node:sqlite` errors | Use Node 22.18 or newer (`node --version`). |
+| `Unknown file extension ".ts"`, `no such module: fts5` or `node:sqlite` errors | Use Node 22.18 or newer (`node --version`). |
+| Notes say `summarizer … none` in `doctor` | No claude CLI, no `ANTHROPIC_API_KEY`, no `summarizer.command`. Search still works on raw text; pick a backend under [The notes](#the-notes-summarizer). |
 | Agent doesn't see the server | `claude mcp list` / `gemini mcp list`. Use absolute paths. Run `node ~/second-brain/src/mcp.ts` yourself: it should print `second-brain MCP server ready (stdio)` and wait. `npm run smoke -- your words` runs a real stdio client against it. |
 | Search finds nothing | Use fewer, more specific words: a project name, a tool, an exact error. `second-brain stats` shows what's indexed. |
 | My current session isn't searchable yet | The newest part of an active session is indexed after 20 quiet minutes (`connectors["claude-sessions"].idleMinutes`). |

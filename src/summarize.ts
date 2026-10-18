@@ -74,17 +74,24 @@ export async function summarizePending(
   opts: { limit?: number; ids?: string[]; log?: (m: string) => void; llm?: Llm } = {},
 ): Promise<SummarizeResult> {
   const log = opts.log ?? (() => {});
-  const llm = opts.llm ?? pickLlm(cfg);
   const limit = opts.limit ?? cfg.maxRecordsPerRun;
   const result: SummarizeResult = {
     summarized: 0,
     failed: 0,
     costUsd: 0,
     remaining: brain.pendingCount(),
-    model: llm?.model ?? 'none',
+    model: 'none',
     errors: [],
     stoppedForCost: false,
   };
+  let llm: Llm | null;
+  try {
+    llm = opts.llm ?? pickLlm(cfg);
+  } catch (e) {
+    result.errors.push((e as Error).message);
+    return result;
+  }
+  result.model = llm?.model ?? 'none';
   if (!llm || limit <= 0) return result;
   const records = opts.ids?.length ? brain.pendingByIds(opts.ids) : brain.pending(limit);
   if (!records.length) return result;
@@ -115,7 +122,7 @@ export async function summarizePending(
           brain.saveSummary(r.id, r.hash, { summary: n.summary, question: n.question, facts: noteToFacts(n) }, out.model);
           result.summarized++;
         }
-        log(`  ✓ ${result.summarized}/${records.length} notes written  ($${result.costUsd.toFixed(4)} so far)`);
+        log(`  ✓ ${result.summarized}/${records.length} notes written${result.costUsd > 0 ? `  ($${result.costUsd.toFixed(4)} so far)` : ''}`);
       } catch (e) {
         result.failed += batch.length;
         result.errors.push((e as Error).message);

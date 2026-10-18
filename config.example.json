@@ -35,6 +35,7 @@
   },
   "summarizer": {
     "backend": "auto",
+    "command": "",
     "cliModel": "haiku",
     "apiModel": "claude-haiku-5-5",
     "maxRecordsPerRun": 200,

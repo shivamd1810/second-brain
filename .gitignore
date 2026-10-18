@@ -8,6 +8,11 @@ data/
 *.db-shm
 credentials.json
 token.json
+*token*.json
+client_secret*.json
+*.pem
+*.key
 *.log
 .env
+.env.*
 .DS_Store

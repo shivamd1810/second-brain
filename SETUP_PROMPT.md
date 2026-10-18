@@ -1,8 +1,8 @@
 # Setup prompt
 
-Copy everything in the box below and paste it into your coding agent (Claude Code works best,
-because the cheap note-taking model runs through your Claude Code login; Gemini CLI and Codex
-can run the setup too). The basic version (your Claude Code sessions + git history) takes about
+Copy everything in the box below and paste it into your coding agent: Claude Code, Gemini CLI
+or Codex. (With Claude Code the cheap note-taking model runs through your existing login; with
+the others you pick a model in step 1.) The basic version (your Claude Code sessions + git history) takes about
 five minutes. Gmail is an optional extra step at the end.
 
 Before you paste: if you cloned a fork, change the `git clone` URL in step 2.
@@ -18,9 +18,11 @@ outside ~/.second-brain without asking me first. Never enter passwords or tokens
 1. Check prerequisites and stop if one fails (tell me how to fix it):
    - `node --version` is 22.18 or newer
    - `git --version` works
-   - `claude -p "reply with ok" --model haiku` prints ok. (This is the cheap model that writes
-     the notes. It uses my Claude Code login. If I don't use Claude Code, tell me I can set
-     ANTHROPIC_API_KEY instead, or turn notes off with summarizer.backend = "none".)
+   - A cheap model for the notes. Check `claude -p "reply with ok" --model haiku` prints ok
+     (uses my Claude Code login). If I don't use Claude Code: tell me the other options from the
+     README's "The notes" section (ANTHROPIC_API_KEY, or summarizer.backend = "command" with my
+     own CLI such as Gemini CLI, Codex or Ollama) and set the one I pick in
+     ~/.second-brain/config.json after step 3. Without any model, search still works on raw text.
 
 2. Clone and install (skip the clone if ~/second-brain already exists):
    git clone https://github.com/OWNER/second-brain ~/second-brain
@@ -52,9 +54,10 @@ outside ~/.second-brain without asking me first. Never enter passwords or tokens
 8. Offer these extras, one by one. Do each only if I say yes:
    a. Keep my Claude Code sessions: Claude Code deletes them after 30 days. Set
       "cleanupPeriodDays": 3650 in ~/.claude/settings.json (merge, don't overwrite the file).
-   b. Keep it fresh automatically: on macOS `node src/cli.ts schedule install` syncs every
-      15 minutes and shows a notification if a source breaks. On Linux, show me the cron line
-      from `node src/cli.ts schedule print`.
+   b. Keep it fresh automatically, every 15 minutes: on macOS or Linux,
+      `node src/cli.ts schedule install` (launchd job / one crontab line; notifies me if a source
+      breaks). On Windows, show me the command from `node src/cli.ts schedule print` and the
+      README's Windows steps. Anywhere: `node src/cli.ts sync --watch` in a spare terminal.
    c. Notes for everything else: `node src/cli.ts summarize --limit 500`. It uses my Claude
       plan's usage (about $0.0015 per record at API list prices) and can be stopped and resumed.
    d. Gmail (read-only, about 10 more minutes, needs a Google Cloud OAuth client):
@@ -69,8 +72,8 @@ Finish with `node src/cli.ts doctor` and show me the result.
 | Step | Command | Time (measured on a Mac, Oct 2026) |
 |------|---------|------------------------------------|
 | 2 | `git clone` + `npm install` | a few seconds (longer on a cold npm cache) |
-| 3 | `init --scan ~/workspace` | 1 s |
-| 4 | `sync --limit 25` (1,456 records indexed, 25 notes) | ~85 s |
+| 3 | `init --scan <your code folder>` | 1 s |
+| 4 | `sync --limit 25` (~1,000 transcript files indexed in seconds, then 25 notes) | ~85 s |
 | 6 | `claude mcp add …` | seconds |
 | 7 | first question in Claude Code | 10–20 s |
 

@@ -108,3 +108,34 @@ test('MCP server: an agent can list tools, search and fetch a record', async () 
   assert.equal(missing.isError, true);
   await client.close();
 });
+
+test('command backend: any stdin→JSON command can write the notes', async () => {
+  const { commandLlm, pickLlm, resolveBackend } = await import('../src/llm.ts');
+  const path = await import('node:path');
+  const brain = seed(3);
+  const cfg = testConfig((c) => {
+    c.summarizer.backend = 'command';
+    c.summarizer.command = `"${process.execPath}" "${path.join(import.meta.dirname, 'fixtures', 'fake-llm.mjs')}"`;
+  });
+  assert.equal(resolveBackend(cfg.summarizer).backend, 'command');
+  assert.equal(pickLlm(cfg.summarizer)?.name, 'command');
+  const res = await summarizePending(brain, cfg.summarizer, { llm: commandLlm(cfg.summarizer.command, 'fake-local') });
+  assert.equal(res.summarized, 3);
+  const r = brain.getRecord('r0')!;
+  assert.equal(r.summary, 'Local model note for r0');
+  assert.equal(r.summary_model, 'fake-local');
+  assert.deepEqual(JSON.parse(r.facts_json!).errors, [], 'missing fields default to empty');
+  assert.equal(search(brain, 'flaky clock', cfg.search).length, 3);
+
+  // A command that prints garbage fails the batch and leaves records pending (no crash).
+  const bad = seed(1);
+  const out = await summarizePending(bad, cfg.summarizer, { llm: commandLlm(`"${process.execPath}" -e "console.log('no json here')"`) });
+  assert.equal(out.summarized, 0);
+  assert.equal(bad.pendingCount(), 1);
+  assert.match(out.errors[0], /without valid JSON notes/);
+
+  // backend "command" with no command configured is reported, not thrown.
+  cfg.summarizer.command = '';
+  const empty = await summarizePending(seed(1), cfg.summarizer);
+  assert.match(empty.errors[0], /summarizer.command is empty/);
+});

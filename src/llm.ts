@@ -1,10 +1,13 @@
-// The "cheap model" that takes notes. Two backends:
+// The "cheap model" that takes notes. Three backends, so no single vendor login is required:
 //  - claude-cli: `claude -p --model haiku`, uses your existing Claude Code login (no API key).
 //  - anthropic-api: the Anthropic SDK with ANTHROPIC_API_KEY, model claude-haiku-5-5.
+//  - command: any shell command that reads the prompt on stdin and prints JSON
+//    (Gemini CLI, Codex, Ollama, llm, a script of your own…).
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import { z } from 'zod';
 import type { SummarizerConfig } from './config.ts';
+import { onPath } from './util.ts';
 
 export const NoteSchema = z.object({
   id: z.string(),
@@ -57,7 +60,9 @@ export function claudeCli(model: string, claudePath = 'claude'): Llm {
         '--strict-mcp-config',
       ];
       return new Promise((resolve, reject) => {
-        const child = spawn(claudePath, args, { cwd: os.tmpdir(), stdio: ['pipe', 'pipe', 'pipe'] });
+        // Windows npm shims are .cmd files, which only start through a shell.
+        const shell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(claudePath);
+        const child = spawn(claudePath, args, { cwd: os.tmpdir(), stdio: ['pipe', 'pipe', 'pipe'], shell });
         let out = '';
         let err = '';
         const timer = setTimeout(() => child.kill('SIGTERM'), 300_000);
@@ -98,13 +103,75 @@ function modelName(res: Record<string, unknown>, fallback: string): string {
   return usage ? Object.keys(usage)[0] ?? fallback : fallback;
 }
 
-function safeJson(s: string): unknown {
-  const m = s.match(/\{[\s\S]*\}/);
+/** Pull the JSON out of a model's reply: tolerates ```json fences and text around it. */
+export function safeJson(s: string): unknown {
+  const text = s.replace(/```(?:json)?/gi, '');
+  const starts = [text.indexOf('{'), text.indexOf('[')].filter((i) => i >= 0);
+  if (!starts.length) return undefined;
+  const start = Math.min(...starts);
+  const end = Math.max(text.lastIndexOf('}'), text.lastIndexOf(']'));
   try {
-    return m ? JSON.parse(m[0]) : undefined;
+    return JSON.parse(text.slice(start, end + 1));
   } catch {
     return undefined;
   }
+}
+
+// Weaker models drop empty fields or return a bare array; accept that.
+const strs = z.array(z.string()).default([]);
+const LenientNote = z.object({
+  id: z.string(),
+  summary: z.string().default(''),
+  question: z.string().default(''),
+  errors: strs,
+  fixes: strs,
+  commands: strs,
+  decisions: z.array(z.object({ decision: z.string(), reason: z.string().default('') })).default([]),
+  keywords: strs,
+});
+export const LenientNotes = z.union([
+  z.object({ notes: z.array(LenientNote) }),
+  z.array(LenientNote).transform((notes) => ({ notes })),
+]);
+
+export const JSON_INSTRUCTIONS = `Reply with ONLY one JSON object: no markdown fences, no text before or after. Shape:
+{"notes":[{"id":"<the record id>","summary":"...","question":"...","errors":["..."],"fixes":["..."],"commands":["..."],"decisions":[{"decision":"...","reason":"..."}],"keywords":["..."]}]}`;
+
+/**
+ * Any command that reads a prompt on stdin and prints the model's reply on stdout.
+ * Runs through your shell, e.g. `ollama run qwen2.5:7b` or `gemini -p "Answer now."`.
+ */
+export function commandLlm(command: string, label = command.split(/\s+/)[0] || 'command'): Llm {
+  return {
+    name: 'command',
+    model: label,
+    summarize(system, user) {
+      const prompt = `${system}\n\n${JSON_INSTRUCTIONS}\n\nRecords:\n\n${user}`;
+      return new Promise((resolve, reject) => {
+        const child = spawn(command, { shell: true, cwd: os.tmpdir(), stdio: ['pipe', 'pipe', 'pipe'] });
+        let out = '';
+        let err = '';
+        const timer = setTimeout(() => child.kill('SIGTERM'), 600_000);
+        child.stdout.on('data', (d) => (out += d));
+        child.stderr.on('data', (d) => (err += d));
+        child.on('error', (e) => {
+          clearTimeout(timer);
+          reject(new Error(`could not run summarizer.command: ${e.message}`));
+        });
+        child.on('close', (code) => {
+          clearTimeout(timer);
+          const parsed = LenientNotes.safeParse(safeJson(out));
+          if (!parsed.success) {
+            reject(new Error(`summarizer.command exited ${code} without valid JSON notes: ${(out || err).trim().slice(0, 300)}`));
+            return;
+          }
+          resolve({ notes: parsed.data.notes, costUsd: 0, model: label });
+        });
+        child.stdin.on('error', () => {}); // the command may exit before reading everything
+        child.stdin.end(prompt);
+      });
+    },
+  };
 }
 
 export function anthropicApi(model: string): Llm {
@@ -132,9 +199,24 @@ export function anthropicApi(model: string): Llm {
   };
 }
 
+export type Backend = Exclude<SummarizerConfig['backend'], 'auto'>;
+
+/** Which backend "auto" means on this machine, and why. */
+export function resolveBackend(cfg: SummarizerConfig): { backend: Backend; why: string } {
+  if (cfg.backend !== 'auto') return { backend: cfg.backend, why: 'set in config' };
+  if (process.env.ANTHROPIC_API_KEY) return { backend: 'anthropic-api', why: 'ANTHROPIC_API_KEY is set' };
+  if (process.env.SECOND_BRAIN_CLAUDE || onPath('claude')) return { backend: 'claude-cli', why: 'claude is installed' };
+  if (cfg.command) return { backend: 'command', why: 'summarizer.command is set' };
+  return { backend: 'none', why: 'no claude CLI, no ANTHROPIC_API_KEY and no summarizer.command; search uses raw text' };
+}
+
 export function pickLlm(cfg: SummarizerConfig): Llm | null {
-  const backend = cfg.backend === 'auto' ? (process.env.ANTHROPIC_API_KEY ? 'anthropic-api' : 'claude-cli') : cfg.backend;
+  const { backend } = resolveBackend(cfg);
   if (backend === 'none') return null;
   if (backend === 'anthropic-api') return anthropicApi(cfg.apiModel);
-  return claudeCli(cfg.cliModel, process.env.SECOND_BRAIN_CLAUDE || 'claude');
+  if (backend === 'command') {
+    if (!cfg.command) throw new Error('summarizer.backend is "command" but summarizer.command is empty');
+    return commandLlm(cfg.command);
+  }
+  return claudeCli(cfg.cliModel, process.env.SECOND_BRAIN_CLAUDE || onPath('claude') || 'claude');
 }

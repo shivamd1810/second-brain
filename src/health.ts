@@ -3,6 +3,7 @@
 //   ERROR  = the last run failed, but an earlier one succeeded recently
 //   QUIET  = runs fine but brought nothing new for `quietHours[connector]` (0 disables)
 import { execFile } from 'node:child_process';
+import { onPath } from './util.ts';
 import type { Config } from './config.ts';
 import { CONNECTORS } from './connectors/index.ts';
 import type { Brain, ConnectorRow } from './db.ts';
@@ -84,8 +85,12 @@ export function staleWarning(brain: Brain, cfg: Config): string | null {
   return `⚠ Memory may be out of date: ${bad.map((b) => `${b.name} is ${b.status} (last good sync ${ago(b.lastSuccess)})`).join('; ')}. Tell the user to run \`second-brain doctor\`.`;
 }
 
-/** macOS notification so you hear about a broken connector the same day. */
+/** Desktop notification so you hear about a broken connector the same day (macOS, Linux). */
 export function notify(title: string, message: string): void {
+  if (process.platform === 'linux' && onPath('notify-send')) {
+    execFile('notify-send', [title, message], () => {});
+    return;
+  }
   if (process.platform !== 'darwin') return;
   const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   execFile('osascript', ['-e', `display notification "${esc(message)}" with title "${esc(title)}"`], () => {});
