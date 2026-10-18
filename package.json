@@ -10,6 +10,7 @@
     "brain": "node src/cli.ts",
     "mcp": "node src/mcp.ts",
     "test": "node --test test/*.test.ts",
+    "smoke": "node scripts/smoke-mcp.ts",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test"
   },

@@ -14,7 +14,7 @@ import { pickLlm } from './llm.ts';
 import * as schedule from './schedule.ts';
 import { search } from './search.ts';
 import { summarizePending } from './summarize.ts';
-import { sync } from './sync.ts';
+import { runConnectors } from './sync.ts';
 import { isMain } from './util.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -124,17 +124,8 @@ async function cmdSync(argv: string[]): Promise<number> {
   const quiet = Boolean(values.quiet);
   const stamp = new Date().toISOString();
   if (quiet) out(`[${stamp}] sync`);
-  const res = await sync(brain, cfg, {
-    only: values.only?.split(',').map((s) => s.trim()),
-    summarize: !values['no-summarize'],
-    limit: values.limit ? Number(values.limit) : undefined,
-    log: (m) => out(quiet ? `  ${m}` : dim(m)),
-  }).catch((e) => {
-    brain.close();
-    throw e;
-  });
-  // The summarizer logs as it goes; connector results print first in the order they ran.
-  for (const r of res.connectors) {
+  const connectors = await runConnectors(brain, cfg, { only: values.only?.split(',').map((x) => x.trim()) });
+  for (const r of connectors) {
     const name = r.name.padEnd(16);
     if (r.status === 'off') out(`${dim(name + '– off')}  ${dim(r.notes[0] ?? '')}`);
     else if (r.status === 'error') out(`${name}${red('✗ ' + r.error)}`);
@@ -144,13 +135,17 @@ async function cmdSync(argv: string[]): Promise<number> {
       for (const n of r.notes) out(`${' '.repeat(18)}${dim(n)}`);
     }
   }
-  const s = res.summary;
-  if (s) {
+  if (!values['no-summarize']) {
+    const s = await summarizePending(brain, cfg.summarizer, {
+      limit: values.limit ? Number(values.limit) : undefined,
+      log: (m) => out(quiet ? `  ${m}` : dim(m)),
+    });
     if (s.summarized || s.failed) {
-      out(`notes           ${s.failed ? yellow('!') : green('✓')} ${s.summarized} written with ${s.model}${s.failed ? `, ${s.failed} failed` : ''}  ${dim(`(est. $${s.costUsd.toFixed(4)} at API list price)`)}`);
-      if (s.stoppedForCost) out(yellow(`                  stopped at the cost cap ($${cfg.summarizer.maxCostUsdPerRun}); next sync continues`));
+      out(`${'summaries'.padEnd(16)}${s.failed ? yellow('!') : green('✓')} ${bold(String(s.summarized))} written with ${s.model}${s.failed ? `, ${s.failed} failed` : ''}  ${dim(`(est. $${s.costUsd.toFixed(4)} at API list price)`)}`);
+      for (const e of s.errors.slice(0, 2)) out(red(`${' '.repeat(18)}${e}`));
+      if (s.stoppedForCost) out(yellow(`${' '.repeat(18)}stopped at the cost cap ($${cfg.summarizer.maxCostUsdPerRun}); next sync continues`));
     }
-    if (s.remaining) out(dim(`                  ${s.remaining} record(s) still waiting for notes (searchable already; \`second-brain summarize\` continues)`));
+    if (s.remaining) out(dim(`${' '.repeat(18)}${s.remaining} record(s) waiting for summaries (already searchable; \`second-brain summarize\` continues)`));
   }
   const total = brain.counts().reduce((a, b) => a + b.total, 0);
   out(dim(`brain: ${total} records in ${dbPath()}`));
@@ -162,7 +157,7 @@ async function cmdSync(argv: string[]): Promise<number> {
     if (values.notify) notify('Second brain: connector needs attention', bad.map((b) => `${b.name} ${b.status}`).join(', '));
   }
   brain.close();
-  return res.connectors.some((r) => r.status === 'error') ? 1 : 0;
+  return connectors.some((r) => r.status === 'error') ? 1 : 0;
 }
 
 async function cmdSummarize(argv: string[]): Promise<void> {
