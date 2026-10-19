@@ -2,6 +2,12 @@
   "name": "second-brain",
   "version": "0.1.0",
   "description": "A local, plain-text second brain for coding agents: connectors pull your own data, a cheap model takes notes, SQLite FTS5 (BM25) searches it, and one MCP server shares it with Claude Code, Gemini CLI and Codex.",
+  "license": "MIT",
+  "author": "Shivam Dixit",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shivamd1810/second-brain.git"
+  },
   "type": "module",
   "bin": {
     "second-brain": "src/cli.ts"

@@ -5,12 +5,12 @@ or Codex. (With Claude Code the cheap note-taking model runs through your existi
 the others you pick a model in step 1.) The basic version (your Claude Code sessions + git history) takes about
 five minutes. Gmail is an optional extra step at the end.
 
-Before you paste: if you cloned a fork, change the `git clone` URL in step 2.
+Using a fork? Change the `git clone` URL in step 2.
 
 ```text
 Install "second-brain" for me: a local memory that indexes my Claude Code sessions and git
 history into one SQLite file on my disk, and lets my coding agents search it over MCP.
-Repo: https://github.com/OWNER/second-brain
+Repo: https://github.com/shivamd1810/second-brain
 
 Go step by step and show me the important output of each step. Never change a config file
 outside ~/.second-brain without asking me first. Never enter passwords or tokens for me.
@@ -25,7 +25,7 @@ outside ~/.second-brain without asking me first. Never enter passwords or tokens
      ~/.second-brain/config.json after step 3. Without any model, search still works on raw text.
 
 2. Clone and install (skip the clone if ~/second-brain already exists):
-   git clone https://github.com/OWNER/second-brain ~/second-brain
+   git clone https://github.com/shivamd1810/second-brain ~/second-brain
    cd ~/second-brain && npm install
 
 3. Find my git repos: look for folders that contain a .git directory, at most 3 levels deep,

@@ -83,7 +83,7 @@ Tested on macOS. Linux uses the same code paths (cron instead of launchd). Windo
 tested; WSL is the safe route there.
 
 ```bash
-git clone https://github.com/OWNER/second-brain ~/second-brain
+git clone https://github.com/shivamd1810/second-brain ~/second-brain
 cd ~/second-brain && npm install
 
 # Point it at your repos (scan a folder, or list repos with --git)
@@ -408,4 +408,4 @@ Node runs the `.ts` files directly (type stripping), so there is no build step.
 
 ## License
 
-Not chosen yet.
+[MIT](LICENSE)
